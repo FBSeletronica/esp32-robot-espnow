@@ -8,6 +8,8 @@ This repository includes two firmware projects:
 
 The system is designed for low-latency communication without relying on a traditional Wi-Fi network.
 
+![ESP-NOW Robot Control System](images/1.jpg)
+
 ## Key Features
 
 - 6-button interface for direction and speed control
@@ -30,6 +32,8 @@ The system is designed for low-latency communication without relying on a tradit
 
 - ESP32-based board compatible with ESP-NOW
 - Motor drivers and actuators according to your hardware setup
+
+![Robot Schematic](images/schematic.png)
 
 ## Software Dependencies
 
