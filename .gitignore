@@ -1,0 +1,98 @@
+# Arduino/PlatformIO Build Output
+build/
+.pio/
+.pioenvs/
+.piolibdeps/
+dist/
+*.o
+*.a
+*.lib
+*.d
+
+# Compiled Object Files
+*.slo
+*.lo
+*.o
+*.obj
+*.gch
+*.pch
+
+# Compiled Dynamic Libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static Libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Arduino IDE
+.DS_Store
+Thumbs.db
+.vscode/extensions.json
+
+# VS Code
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json
+.vscode/.gitignore
+
+# IDE / Editors
+.idea/
+*.sublime-project
+*.sublime-workspace
+.netbeans/
+*.swp
+*.swo
+*~
+.env
+.env.local
+
+# OS-specific
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Temporary Files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.swp
+*~
+.#*
+
+# Debug Files
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+
+# Serial Monitor Logs
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+
+# Project-specific
+.arduino15/
+sketchbook/
+.codex
+.vscode/
