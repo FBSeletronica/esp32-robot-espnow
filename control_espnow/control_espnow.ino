@@ -21,7 +21,8 @@
  *
  * COMMUNICATION:
  * - Protocol: ESP-NOW (peer-to-peer WiFi)
- * - Reliability: Automatic retransmission with ESPNowProtocol library
+ * - Commands: sent without ACK; the current state is resent every 100ms,
+ *   so a lost packet is replaced by the next one instead of being retried
  * - Message Types: Control commands and telemetry reception
  * - Auto-discovery: Enabled for automatic peer detection
  *
@@ -33,7 +34,7 @@
  *
  * AUTHOR: Fabio Souza
  * LICENSE: MIT License
- * VERSION: 1.2
+ * VERSION: 1.3
  * 
  * ============================================================================
  */
@@ -200,8 +201,12 @@ const int SPEED_STEP = 10;     // Speed increment/decrement step
 // ============================================================================
 
 int speed = MIN_SPEED;                // Current speed setting
-bool lastButtonAState = HIGH;         // Previous state of speed-up button
-bool lastButtonBState = HIGH;         // Previous state of speed-down button
+
+// Debounced state of the speed buttons (true = pressed)
+bool buttonAStable = false;
+bool buttonBStable = false;
+unsigned long buttonAChangedAt = 0;
+unsigned long buttonBChangedAt = 0;
 
 uint8_t lastCmdSent = 255;           // Last command transmitted
 int lastSpeedSent = -1;               // Last speed value transmitted
@@ -214,7 +219,10 @@ unsigned long lastSendTime = 0;      // Timestamp of last sent command
 
 // Communication timing parameters
 #define LINK_TIMEOUT 3000   // Lost connection timeout (ms)
-#define SEND_INTERVAL 100   // Minimum interval between commands (ms)
+#define SEND_INTERVAL 100   // Keep-alive interval when the command is unchanged (ms)
+#define DEBOUNCE_TIME 50    // Button debounce time (ms)
+
+bool displayReady = false;           // OLED initialized successfully
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -241,6 +249,28 @@ String getCommandName(uint8_t cmd)
   }
 }
 
+/**
+ * buttonPressed()
+ * 
+ * Debounces a button and reports a new press (released -> pressed edge).
+ * Changes faster than DEBOUNCE_TIME after the last accepted change are ignored.
+ * 
+ * @param pressed   Raw reading (true = pressed)
+ * @param stable    Debounced state, updated in place
+ * @param changedAt Time of the last accepted change, updated in place
+ * @return true only on the loop iteration where a press is accepted
+ */
+bool buttonPressed(bool pressed, bool &stable, unsigned long &changedAt)
+{
+  if (pressed != stable && millis() - changedAt >= DEBOUNCE_TIME)
+  {
+    stable = pressed;
+    changedAt = millis();
+    return pressed;
+  }
+  return false;
+}
+
 // ============================================================================
 // DISPLAY FUNCTIONS
 // ============================================================================
@@ -255,10 +285,32 @@ String getCommandName(uint8_t cmd)
  * - Signal strength (RSSI)
  * - Wireless connection status
  * 
- * Called continuously from main loop to keep display current.
+ * Called from the main loop; only redraws when a shown value changed,
+ * since sending a full frame over I2C takes ~25ms.
  */
 void drawDisplay()
 {
+  static uint8_t shownCmd = 254;
+  static int shownSpeed = -2;
+  static int8_t shownRSSI = 1;
+  static bool shownLink = true;
+  static bool firstDraw = true;
+
+  if (!displayReady) return;
+
+  if (!firstDraw &&
+      shownCmd == lastCmdSent &&
+      shownSpeed == lastSpeedSent &&
+      shownRSSI == lastRSSI &&
+      shownLink == linkOk)
+    return;
+
+  firstDraw = false;
+  shownCmd = lastCmdSent;
+  shownSpeed = lastSpeedSent;
+  shownRSSI = lastRSSI;
+  shownLink = linkOk;
+
   display.clearDisplay();
 
   display.setTextSize(1);
@@ -316,17 +368,20 @@ void onData(uint8_t src, uint8_t id, const uint8_t *data, uint8_t len, int8_t rs
  * sendCommand()
  * 
  * Transmits movement command to the robot via ESP-NOW.
- * Uses ESPNowProtocol::sendReliable() for guaranteed delivery with retransmission.
+ * Uses ESPNowProtocol::send() (no ACK/retry): commands are a continuous
+ * stream, so retrying an old packet would only deliver stale commands.
  * 
- * Optimization: Avoids sending identical commands sent recently to reduce traffic.
+ * A changed command or speed is sent immediately; an unchanged one is
+ * resent every SEND_INTERVAL as keep-alive for the robot's fail-safe.
  * 
  * @param cmd    Movement command (CMD_*)
  * @param speed  Speed level (MIN_SPEED to MAX_SPEED)
  */
 void sendCommand(uint8_t cmd, int speed)
 {
-  // Skip repeated transmissions that happen too quickly.
+  // Skip unchanged commands until the keep-alive interval elapses.
   if (cmd == lastCmdSent &&
+      speed == lastSpeedSent &&
       millis() - lastSendTime < SEND_INTERVAL)
     return;
 
@@ -334,12 +389,16 @@ void sendCommand(uint8_t cmd, int speed)
   ctrl.cmd = cmd;
   ctrl.speed = speed;
 
-  protocol.sendReliable(ROBOT_ID, MSG_CONTROL, (uint8_t*)&ctrl, sizeof(ctrl));
+  protocol.send(ROBOT_ID, MSG_CONTROL, (uint8_t*)&ctrl, sizeof(ctrl));
 
-  Serial.print("CMD: ");
-  Serial.print(cmd);
-  Serial.print(" | Speed: ");
-  Serial.println(speed);
+  // Log only changes, not the periodic keep-alive.
+  if (cmd != lastCmdSent || speed != lastSpeedSent)
+  {
+    Serial.print("CMD: ");
+    Serial.print(cmd);
+    Serial.print(" | Speed: ");
+    Serial.println(speed);
+  }
 
   lastCmdSent = cmd;
   lastSpeedSent = speed;
@@ -369,17 +428,25 @@ void setup()
 
   Wire.begin(OLED_SDA, OLED_SCL);
 
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  display.setTextColor(WHITE);
+  displayReady = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
 
-  // Show the Franzininho logo before entering controller mode.
-  display.clearDisplay();
-  display.drawBitmap(0, 0, franzininho_logo_128x64, imageWidth, imageHeight, WHITE);
-  display.display();
-  delay(2000);
+  if (displayReady)
+  {
+    display.setTextColor(WHITE);
 
-  display.clearDisplay();
-  display.display();
+    // Show the Franzininho logo before entering controller mode.
+    display.clearDisplay();
+    display.drawBitmap(0, 0, franzininho_logo_128x64, imageWidth, imageHeight, WHITE);
+    display.display();
+    delay(2000);
+
+    display.clearDisplay();
+    display.display();
+  }
+  else
+  {
+    Serial.println("Falha ao iniciar display SSD1306");
+  }
 
   pinMode(BOTAO_UP, INPUT_PULLUP);
   pinMode(BOTAO_LEFT, INPUT_PULLUP);
@@ -388,13 +455,16 @@ void setup()
   pinMode(BOTAO_A, INPUT_PULLUP);
   pinMode(BOTAO_B, INPUT_PULLUP);
 
-  protocol.begin();
+  if (!protocol.begin())
+  {
+    Serial.println("Falha ao iniciar ESP-NOW");
+  }
   protocol.setNodeId(CONTROLLER_ID);
 
   protocol.enableAutoDiscovery(true);
   protocol.onReceive(onData);
 
-  Serial.println("Controller ready (v1.1 clean)");
+  Serial.println("Controller ready (v1.3)");
 }
 
 /**
@@ -404,17 +474,17 @@ void setup()
  * 
  * 1. Process ESP-NOW events (protocol.loop())
  * 2. Read button inputs (directional pad + speed buttons)
- * 3. Update speed level based on button A/B presses
+ * 3. Update speed level based on debounced button A/B presses
  * 4. Determine current movement command based on directional buttons
- * 5. Send command to robot if changed or interval elapsed
+ * 5. Send command to robot if changed or keep-alive interval elapsed
  * 6. Monitor connection timeout (marks link lost after 3s without telemetry)
- * 7. Update OLED display
- * 8. Small delay to prevent overload (20ms, ~50Hz update rate)
+ * 7. Update OLED display (only when something changed)
+ * 8. Small delay to prevent overload (20ms, ~50Hz button sampling)
  * 
  * Timing:
- * - Command transmission: minimum 100ms between updates
+ * - Command transmission: immediate on change, keep-alive every 100ms
  * - Connection timeout: 3000ms (3 seconds)
- * - Display refresh: ~50Hz (20ms loop time)
+ * - Button sampling: ~50Hz (20ms loop time)
  */
 void loop()
 {
@@ -429,9 +499,9 @@ void loop()
   bool buttonA = digitalRead(BOTAO_A) == LOW;
   bool buttonB = digitalRead(BOTAO_B) == LOW;
 
-  // Speed adjustment: detect rising edge (button press) only
+  // Speed adjustment: act on debounced press only
   // Increment speed when Button A is pressed
-  if (buttonA && lastButtonAState == HIGH)
+  if (buttonPressed(buttonA, buttonAStable, buttonAChangedAt))
   {
     speed += SPEED_STEP;
     if (speed > MAX_SPEED)
@@ -440,7 +510,7 @@ void loop()
     }
   }
 
-  if (buttonB && lastButtonBState == HIGH)
+  if (buttonPressed(buttonB, buttonBStable, buttonBChangedAt))
   {
     // Decrement speed when Button B is pressed
     speed -= SPEED_STEP;
@@ -449,9 +519,6 @@ void loop()
       speed = MIN_SPEED;
     }
   }
-
-  lastButtonAState = buttonA ? LOW : HIGH;
-  lastButtonBState = buttonB ? LOW : HIGH;
 
   // Determine movement command based on directional pad
   // Priority: UP > DOWN > LEFT > RIGHT

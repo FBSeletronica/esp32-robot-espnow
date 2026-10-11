@@ -3,6 +3,7 @@
  * 
  * Author: Fabio Souza
  * License: MIT
+ * Version: 1.3
  * 
  * Description:
  * This sketch implements a robot control system using ESP-NOW protocol for wireless communication.
@@ -21,6 +22,10 @@
  * - Synchronized eye animation based on movement state
  * - Fail-safe mechanism with 500ms command timeout
  * - Telemetry transmission every 1 second
+ *
+ * Requirements:
+ * - Dual-core ESP32 (the face task is pinned to core 1)
+ * - Arduino-ESP32 core 3.x (ledcAttach API)
  * - Multiple face expressions (idle, forward, backward, left, right, timeout)
  * - Face recovery animation on connection restoration
  */
@@ -84,6 +89,10 @@
 #define CMD_LEFT      3  // Rotate left (pivot turn)
 #define CMD_RIGHT     4  // Rotate right (pivot turn)
 
+// ESP-NOW logical node IDs
+#define CONTROLLER_ID 1  // Remote controller
+#define ROBOT_ID      2  // This device (robot)
+
 // --------------------------------------------------
 // Communication Packet Structures
 // ESP-NOW payload formats for control and telemetry
@@ -132,8 +141,18 @@ TaskHandle_t faceAnimationTaskHandle = nullptr;
 // --------------------------------------------------
 
 // Communication timing
-unsigned long lastCommandTime = 0;  // Timestamp of last received command
-unsigned long lastTelemetry = 0;    // Timestamp of last sent telemetry
+// lastCommandTime is written by the ESP-NOW callback (WiFi task, core 0)
+// and read by loop() (core 1), so it is only accessed inside commandMux.
+volatile unsigned long lastCommandTime = 0;  // Timestamp of last received command
+unsigned long lastTelemetry = 0;             // Timestamp of last sent telemetry
+
+// Latest control packet handed from the ESP-NOW callback to loop()
+portMUX_TYPE commandMux = portMUX_INITIALIZER_UNLOCKED;
+control_t pendingControl;            // Protected by commandMux
+volatile bool commandPending = false;
+
+// True while motors are stopped because no command arrived in time
+bool failsafeActive = false;
 
 // --------------------------------------------------
 // Timing Configuration (milliseconds and thresholds)
@@ -145,7 +164,6 @@ unsigned long lastTelemetry = 0;    // Timestamp of last sent telemetry
 #define FACE_RECOVERY_DURATION 800       // Recovery animation duration on reconnect
 #define FACE_IDLE_SPEED_THRESHOLD 20     // Speed below which robot is considered idle
 #define FACE_FAST_SPEED_THRESHOLD 150    // Speed threshold for angry face expression
-#define ANGRY_SPEED_THRESHOLD 200        // (Currently unused - candidate for refactoring)
 
 /**
  * Face animation states
@@ -166,14 +184,14 @@ enum FaceState : uint8_t
 
 // --------------------------------------------------
 // FACE ANIMATION STATE VARIABLES
-// Used by faceAnimationTask (runs on core 1) - marked volatile for thread safety
+// Shared between loop() and faceAnimationTask - marked volatile
 // --------------------------------------------------
 
 // Display initialization flag
 volatile bool faceDisplayReady = false;
 
 // Target face state (updated by main loop, read by animation task)
-volatile FaceState desiredFaceState = FACE_BOOT;
+volatile FaceState desiredFaceState = FACE_IDLE;
 
 // Last received command and speed (for recovery animations)
 volatile uint8_t lastControlCmd = CMD_STOP;
@@ -181,9 +199,6 @@ volatile uint8_t lastControlSpeed = 0;
 
 // Trigger recovery animation when connection is restored after loss
 volatile bool faceRecoveryPending = false;
-
-// Communication link status (true when actively receiving commands)
-bool hasControlLink = false;
 
 // --------------------------------------------------
 // FACE STATE MACHINE
@@ -330,7 +345,7 @@ void applyFaceState(FaceState state)
 
     case FACE_LEFT:
       roboEyes.setMood(DEFAULT);
-      roboEyes.setPosition(E);  // Looking right (reverse of left motor command)
+      roboEyes.setPosition(E);  // Robot looks to its left (viewer sees eyes move right)
       roboEyes.setCuriosity(ON);
       roboEyes.setIdleMode(OFF, 0, 0);
       roboEyes.setAutoblinker(OFF, 3, 2);
@@ -338,7 +353,7 @@ void applyFaceState(FaceState state)
 
     case FACE_RIGHT:
       roboEyes.setMood(DEFAULT);
-      roboEyes.setPosition(W);  // Looking left (reverse of right motor command)
+      roboEyes.setPosition(W);  // Robot looks to its right (viewer sees eyes move left)
       roboEyes.setCuriosity(ON);
       roboEyes.setIdleMode(OFF, 0, 0);
       roboEyes.setAutoblinker(OFF, 3, 2);
@@ -378,11 +393,11 @@ void setupFaceDisplay()
 }
 
 /**
- * Face animation task - runs on core 1
+ * Face animation task - pinned to core 1 (shared with the Arduino loop task)
  * This FreeRTOS task handles all eye animation updates and state transitions
  * 
  * Features:
- * - Boot animation with laugh sound on startup
+ * - Laugh animation on startup
  * - Transitions between face states with smooth animations
  * - Recovery animation when connection is restored
  * - 10ms update interval for smooth 100 FPS rendering
@@ -400,10 +415,13 @@ void faceAnimationTask(void *parameter)
   unsigned long recoveryStartedAt = 0;
   bool recoveryActive = false;
   bool bootAnimationPlayed = false;
+  bool bootDone = false;
 
   for (;;)
   {
     unsigned long now = millis();
+    // Read the shared state once so every branch below sees the same value
+    FaceState target = desiredFaceState;
 
     if (!bootAnimationPlayed && faceDisplayReady)
     {
@@ -416,8 +434,8 @@ void faceAnimationTask(void *parameter)
       if (now - recoveryStartedAt >= FACE_RECOVERY_DURATION)
       {
         recoveryActive = false;
-        applyFaceState((FaceState)desiredFaceState);
-        appliedState = (FaceState)desiredFaceState;
+        applyFaceState(target);
+        appliedState = target;
       }
     }
     else if (faceRecoveryPending)
@@ -427,16 +445,20 @@ void faceAnimationTask(void *parameter)
       recoveryStartedAt = now;
       recoveryActive = true;
     }
-    else if (appliedState == FACE_BOOT && now - bootStartedAt >= FACE_BOOT_DURATION)
+    else if (!bootDone)
     {
-      desiredFaceState = FACE_IDLE;
-      applyFaceState(FACE_IDLE);
-      appliedState = FACE_IDLE;
+      // Hold the boot face, then switch to whatever loop() requested meanwhile
+      if (now - bootStartedAt >= FACE_BOOT_DURATION)
+      {
+        bootDone = true;
+        applyFaceState(target);
+        appliedState = target;
+      }
     }
-    else if (appliedState != desiredFaceState)
+    else if (appliedState != target)
     {
-      applyFaceState((FaceState)desiredFaceState);
-      appliedState = (FaceState)desiredFaceState;
+      applyFaceState(target);
+      appliedState = target;
     }
 
     roboEyes.update();
@@ -559,7 +581,7 @@ void stopMotors()
 
 /**
  * Execute motor command with speed
- * Called whenever a new control packet is received
+ * Called from loop() whenever a new control packet is received
  * 
  * @param cmd Motor command (CMD_STOP, CMD_FORWARD, CMD_BACKWARD, CMD_LEFT, CMD_RIGHT)
  * @param speed Motor speed (0-255)
@@ -616,9 +638,10 @@ void executeCommand(uint8_t cmd, uint8_t speed)
 
 /**
  * ESP-NOW data receive callback
- * Called automatically when a packet is received via ESP-NOW (uses interrupt)
+ * Runs in the WiFi task (core 0), not in loop(). It only stores the packet;
+ * motors and face are updated by loop() to avoid concurrent access.
  * 
- * @param src MAC address of sender (as array index - 1-255)
+ * @param src Logical node ID of the sender
  * @param id Message type ID (MSG_CONTROL or MSG_TELEMETRY)
  * @param data Payload pointer
  * @param len Payload length in bytes
@@ -627,35 +650,23 @@ void executeCommand(uint8_t cmd, uint8_t speed)
  * Behavior:
  * - Only processes MSG_CONTROL packets
  * - Validates packet length matches control_t struct size
- * - Updates last command timestamp for fail-safe mechanism
- * - Sets hasControlLink flag to enable telemetry
- * - Triggers recovery animation if connection was previously lost (wasDisconnected)
- * - Logs received command and RSSI to serial
+ * - Stores the latest command and its timestamp for loop() and the fail-safe
  */
 
 void onData(uint8_t src, uint8_t id, const uint8_t *data, uint8_t len, int8_t rssi)
 {
+  (void)src;
+  (void)rssi;
+
   if (id != MSG_CONTROL) return;
 
   if (len != sizeof(control_t)) return;
 
-  control_t ctrl;
-  memcpy(&ctrl, data, sizeof(ctrl));
-
-  bool wasDisconnected = !hasControlLink || (millis() - lastCommandTime > COMMAND_TIMEOUT);
+  taskENTER_CRITICAL(&commandMux);
+  memcpy(&pendingControl, data, sizeof(pendingControl));
   lastCommandTime = millis();
-  hasControlLink = true;
-  if (wasDisconnected)
-  {
-    faceRecoveryPending = true;
-  }
-
-  Serial.print("From: ");
-  Serial.print(src);
-  Serial.print(" | RSSI: ");
-  Serial.println(rssi);
-
-  executeCommand(ctrl.cmd, ctrl.speed);
+  commandPending = true;
+  taskEXIT_CRITICAL(&commandMux);
 }
 
 // --------------------------------------------------
@@ -672,16 +683,14 @@ void setup()
 {
   Serial.begin(115200);
 
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
-  pinMode(IN3, OUTPUT);
-  pinMode(IN4, OUTPUT);
-
   setupPWM();
   stopMotors();
 
-  protocol.begin();
-  protocol.setNodeId(2); // ROBÔ
+  if (!protocol.begin())
+  {
+    Serial.println("Falha ao iniciar ESP-NOW");
+  }
+  protocol.setNodeId(ROBOT_ID);
 
   protocol.enableAutoDiscovery(true);
   protocol.onReceive(onData);
@@ -689,17 +698,18 @@ void setup()
   lastCommandTime = millis();
   startFaceAnimationTask();
 
-  Serial.println("Robot ready (v1.2 face task)");
+  Serial.println("Robot ready (v1.3)");
 }
 
 // --------------------------------------------------
 
 /**
  * Main event loop
- * Runs continuously on core 0
+ * Runs in the Arduino loop task (core 1)
  * 
  * Responsibilities:
  * - Process ESP-NOW protocol events
+ * - Execute commands stored by onData()
  * - Implement fail-safe mechanism (stop on command timeout)
  * - Send periodic telemetry to keep link alive
  */
@@ -707,15 +717,43 @@ void loop()
 {
   protocol.loop();
 
+  // Take the pending command and its timestamp atomically
+  bool hasCommand = false;
+  control_t ctrl;
+  unsigned long lastRx;
+
+  taskENTER_CRITICAL(&commandMux);
+  if (commandPending)
+  {
+    ctrl = pendingControl;
+    commandPending = false;
+    hasCommand = true;
+  }
+  lastRx = lastCommandTime;
+  taskEXIT_CRITICAL(&commandMux);
+
+  // Read the clock after lastRx so now - lastRx never underflows
   unsigned long now = millis();
 
-  // FAIL-SAFE (rápido)
-  if (now - lastCommandTime > COMMAND_TIMEOUT)
+  if (hasCommand)
   {
+    if (failsafeActive)
+    {
+      // Link restored after a timeout - play the recovery animation
+      failsafeActive = false;
+      faceRecoveryPending = true;
+    }
+    executeCommand(ctrl.cmd, ctrl.speed);
+  }
+  else if (!failsafeActive && now - lastRx > COMMAND_TIMEOUT)
+  {
+    // FAIL-SAFE: no command within the timeout - stop once and show tired face
+    failsafeActive = true;
     stopMotors();
-    updateFaceState(CMD_STOP, 0);
+    lastControlCmd = CMD_STOP;
+    lastControlSpeed = 0;
     desiredFaceState = FACE_TIMEOUT;
-    hasControlLink = false;
+    Serial.println("Fail-safe: link lost");
   }
 
   // TELEMETRIA (mantém link vivo)
@@ -728,4 +766,7 @@ void loop()
 
     lastTelemetry = now;
   }
+
+  // Yield so the face task and the idle task on core 1 get CPU time
+  delay(1);
 }
