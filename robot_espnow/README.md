@@ -1,294 +1,151 @@
-# ESP32 Robort ESP-NOW 
+# ESP32 Robot ESP-NOW
 
-**Wireless Robot Receiver for ESP32-based Platforms**
+**Wireless Robot Receiver for ESP32**
 
-A complete ESP-NOW based robot firmware that receives wireless commands from a controller, controls motors via PWM, and displays animated robot eyes on an OLED screen. Features fail-safe mechanisms, telemetry feedback, and synchronized eye animations that respond to movement commands.
+Robot firmware that receives commands from the controller over ESP-NOW, drives
+two DC motors, and shows animated eyes on an OLED display. A fail-safe stops the
+motors when the link is lost.
+
+![Robot](../images/3.jpg)
 
 ## Project Information
 
 - **Author:** Fabio Souza
 - **License:** MIT License
-
+- **Version:** 1.3
 
 ## Features
 
-- Animated robot eyes with multiple expressions (idle, forward, backward, left, right, timeout)
-- ESP-NOW wireless receiver with automatic peer discovery
-- PWM motor control for differential drive robots
-- Fail-safe mechanism with 500ms command timeout
-- Telemetry transmission every 1 second
-- Face recovery animations on connection restoration
-- Built for ESP32 boards with dual-core processing
+- Animated robot eyes that react to movement (idle, forward, fast, backward, left, right, link lost)
+- ESP-NOW receiver with automatic peer discovery
+- PWM motor control for differential drive
+- Fail-safe: motors stop after 500 ms without a command
+- Telemetry broadcast every 1 s (used by the controller to show link status)
+- Laugh animation when the link is restored
 
 ## Hardware Requirements
 
-### Microcontroller
-- **ESP32-based board** (any ESP32 with ESP-NOW support)
+- **Dual-core ESP32** board (e.g. ESP32-WROOM-32 / D1 mini ESP32).
+  ESP32-S2, ESP32-C3 and other single-core chips are not supported: the eye
+  animation runs in a FreeRTOS task pinned to core 1.
+- **MX1508** dual H-bridge motor driver (or similar with IN1–IN4 inputs)
+- **2x N20 DC gear motors** in differential drive
+- **SH1106 OLED** display (128x64, I2C, address 0x3C)
+- **5 V USB power bank** — powers the ESP32 (USB) and the motor driver
 
-### Display
-- **SH1106 OLED Display** (128x64 pixels)
-- **Interface:** I2C (TWI)
-- **Address:** 0x3C
-
-### Motors and Drivers
-- **L298N Dual Motor Driver** or compatible
-- **Two DC motors** (differential drive configuration)
-- **Power supply:** Appropriate for motors (typically 6-12V)
+![Robot Schematic](../images/schematic.png)
 
 ## Pinout Reference
 
-### GPIO Configuration
-
-| Function | GPIO Pin | Notes |
+| Function | GPIO | Notes |
 | --- | --- | --- |
-| OLED SDA (I2C Data) | 22 | Pull-up required (internal) |
-| OLED SCL (I2C Clock) | 21 | Pull-up required (internal) |
-| Motor Left Forward (IN1) | 33 | PWM output |
-| Motor Left Backward (IN2) | 27 | PWM output |
-| Motor Right Forward (IN3) | 32 | PWM output |
-| Motor Right Backward (IN4) | 4 | PWM output |
+| OLED SDA | 22 | |
+| OLED SCL | 21 | |
+| Left motor forward (IN1) | 33 | PWM |
+| Left motor backward (IN2) | 27 | PWM |
+| Right motor forward (IN3) | 32 | PWM |
+| Right motor backward (IN4) | 4 | PWM |
+
+Note that SDA/SCL are swapped compared with the usual ESP32 default (SDA 21, SCL 22).
 
 ## Dependencies
 
-This project requires the following libraries. Install them via the Arduino Library Manager:
-
-### Required Libraries
-
-1. **ESPNowProtocol** ⭐
-   - **Author:** Fabio Souza
-   - **GitHub:** https://github.com/FBSeletronica/ESPNowProtocol
-   - **Purpose:** Reliable ESP-NOW wireless communication with automatic retry
-   - **Installation:** Clone or download from the GitHub repository
-
-2. **Adafruit SH110X**
-   - **Author:** Adafruit Industries
-   - **Purpose:** OLED display driver for SH1106/SH1107
-   - **Install via:** Arduino Library Manager (search: "Adafruit SH110X")
-
-3. **FluxGarage RoboEyes**
-   - **Author:** FluxGarage
-   - **Purpose:** Animated robot eyes library
-   - **Install via:** Arduino Library Manager (search: "FluxGarage RoboEyes")
-
-### Installation Steps
+- **Arduino-ESP32 core 3.x** (`esp32:esp32`) — required for `ledcAttach()`
+- [ESPNowProtocol](https://github.com/FBSeletronica/ESPNowProtocol) — clone into `~/Arduino/libraries`
+- Adafruit GFX Library, Adafruit BusIO, Adafruit SH110X — Library Manager
+- FluxGarage RoboEyes — Library Manager
 
 ```bash
-# 1. Install ESPNowProtocol library via Arduino Library Manager
-# Sketch → Include Library → Manage Libraries
-# Search for "ESPNowProtocol" and install the latest version
-
-# 2. Install other dependencies via Arduino IDE
-# Sketch → Include Library → Manage Libraries
-# Search for and install: Adafruit SH110X, FluxGarage RoboEyes
-```
-
-## Wireless Protocol Overview
-
-This project implements the robot side of a two-way ESP-NOW communication system.
-
-### Communication Architecture
-
-```
-┌──────────────┐  Control Message   ┌───────────┐
-│  Controller  ├─────────────────→  │   Robot   │
-│  (Node 1)    │                    │  (Node 2) │
-│              │  ←─────────────────  │           │
-└──────────────┘  Telemetry/Status  └───────────┘
-```
-
-### Network Configuration
-
-| Entity | Node ID | Role |
-| --- | --- | --- |
-| Controller | 1 | Sender of control commands |
-| Robot (this device) | 2 | Receiver of control commands |
-
-### Message Types
-
-| ID | Name | Direction | Purpose |
-| --- | --- | --- | --- |
-| 1 | MSG_CONTROL | Controller → Robot | Movement commands with speed |
-| 2 | MSG_TELEMETRY | Robot → Controller | Status/acknowledgment feedback |
-
-### Control Payload Structure
-
-```cpp
-typedef struct {
-  uint8_t cmd;      // Movement command (see below)
-  uint8_t speed;    // Motor speed (0-255)
-} control_t;
-```
-
-### Movement Commands
-
-| Value | Command | Description | Motor Action |
-| --- | --- | --- | --- |
-| 0 | CMD_STOP | Halt all movement | Both motors stop |
-| 1 | CMD_FORWARD | Move forward | Both motors forward |
-| 2 | CMD_BACKWARD | Move backward | Both motors backward |
-| 3 | CMD_LEFT | Turn left | Left backward, right forward |
-| 4 | CMD_RIGHT | Turn right | Left forward, right backward |
-
-## Build Configuration
-
-### Arduino IDE Settings
-
-The project is configured for ESP32 boards:
-
-- **Board Package:** `esp32:esp32`
-- **Board:** Any ESP32 board (e.g., `esp32dev`, `esp32doit-devkit-v1`)
-- **Upload Port:** `/dev/ttyUSB0` or `/dev/ttyACM0` (your specific COM port)
-- **Upload Speed:** 921600 baud
-
-### VS Code / PlatformIO
-
-If you're using VS Code with the Arduino extension, configuration is already available in:
-- [.vscode/arduino.json](./.vscode/arduino.json) - IDE settings
-- [.vscode/c_cpp_properties.json](./.vscode/c_cpp_properties.json) - IntelliSense configuration
-
-## Getting Started
-
-### 1. Prerequisites
-- Arduino IDE 1.8.x or later (or VS Code with Arduino extension)
-- USB cable for board programming
-- ESP32 board installed in Arduino IDE
-
-### 2. Install Libraries
-```bash
-# Option A: Use Arduino Library Manager (GUI)
-# Sketch → Include Library → Manage Libraries
-# Search and install: Adafruit SH110X, FluxGarage RoboEyes
-
-# Option B: Clone ESPNowProtocol manually
 cd ~/Arduino/libraries
 git clone https://github.com/FBSeletronica/ESPNowProtocol.git
 ```
 
-### 3. Setup and Upload
-1. Open [robot_espnow.ino](./robot_espnow.ino) in Arduino IDE
-2. Verify board selection: **Tools → Board → [your ESP32 board]**
-3. Verify port selection: **Tools → Port → /dev/ttyUSB0** (or your port)
-4. Click **Upload** (or press Ctrl+U)
-5. Wait for "Done uploading" message
+## Wireless Protocol
 
-### 4. Hardware Assembly
-1. Connect SDA (GPIO 22) and SCL (GPIO 21) to OLED display
-2. Connect motor driver inputs to GPIO pins (33, 27, 32, 4)
-3. Connect motors to driver outputs
-4. Ensure proper power distribution (3.3V for ESP32, motor voltage for drivers/motors)
+| Item | Value |
+| --- | --- |
+| Robot node ID | 2 |
+| Controller node ID | 1 |
+| `MSG_CONTROL` (1) | Received from the controller, `{cmd, speed}` |
+| `MSG_TELEMETRY` (2) | Broadcast every 1 s, `{status = 1}` |
 
-### 5. Test the Robot
-1. Power on both robot and controller
-2. Robot should display boot animation with laugh
-3. When controller sends commands:
-   - Motors should respond to movement commands
-   - Eyes should animate according to direction and speed
-   - On timeout (no commands for 500ms), eyes show tired expression and motors stop
+| Value | Command | Motor action |
+| --- | --- | --- |
+| 0 | CMD_STOP | Both motors stopped |
+| 1 | CMD_FORWARD | Both motors forward |
+| 2 | CMD_BACKWARD | Both motors backward |
+| 3 | CMD_LEFT | Left backward, right forward (pivot) |
+| 4 | CMD_RIGHT | Left forward, right backward (pivot) |
 
-## Face Animation System
+## Firmware Architecture
 
-The robot features animated eyes that respond to movement commands:
+| Context | Runs on | Responsibility |
+| --- | --- | --- |
+| `onData()` | WiFi task, core 0 | Stores the latest control packet and its timestamp (inside a critical section) |
+| `loop()` | Arduino loop task, core 1 | Executes the stored command, runs the fail-safe, sends telemetry |
+| `faceAnimationTask()` | FreeRTOS task, core 1 | Applies the eye expression and calls `roboEyes.update()` every 10 ms |
 
-- **Boot:** Curiosity expression with laugh animation
-- **Idle:** Random eye movement and blinking
-- **Forward Slow:** Normal expression looking forward
-- **Forward Fast:** Angry expression with larger eyes
-- **Backward:** Looking backward with taller eyes
-- **Left/Right:** Looking in opposite direction of turn
-- **Timeout:** Tired expression when connection lost
+Motors are only driven from `loop()`, so the ESP-NOW callback and the fail-safe
+never write the PWM outputs at the same time.
+
+## Face Animation
+
+| State | When | Expression |
+| --- | --- | --- |
+| Boot | First 1.2 s | Laugh animation |
+| Idle | Stopped | Random eye movement and blinking |
+| Forward slow | Forward, speed < 150 | Looking up |
+| Forward fast | Forward, speed ≥ 150 | Angry, wider eyes |
+| Backward | Backward | Looking down, taller eyes |
+| Left / Right | Turning | Looking toward the turn, from the robot's point of view (so a person facing the robot sees the eyes go to the opposite side) |
+| Timeout | No command for 500 ms | Tired, with vertical flicker |
+| Recovery | First command after a timeout | Laugh animation for 0.8 s |
 
 ## Motor Control
 
-- **PWM Frequency:** 1 kHz
-- **Resolution:** 8-bit (0-255 speed range)
-- **Driver:** L298N dual H-bridge
-- **Configuration:** Differential drive (tank steering)
+- **PWM:** 1 kHz, 8-bit (0–255)
+- **Speed range from the controller:** 50–200. If the motors do not start at the
+  lowest speed, raise `MIN_SPEED` in the controller firmware.
+
+## Build and Upload
+
+- **Board:** ESP32 Dev Module (`esp32:esp32:esp32`) or your ESP32 board
+
+```bash
+arduino-cli compile -u -p /dev/ttyUSB0 -b esp32:esp32:esp32 .
+```
+
+Measured with core 3.3.8: 72% of flash, 14% of RAM.
+
+## Testing
+
+1. Power on the robot: the eyes play the laugh animation, then show the tired face
+   (no controller yet). Serial prints `Robot ready (v1.3)`.
+2. Power on the controller: after peer discovery the eyes change to idle.
+3. Direction buttons move the robot and change the eyes.
+4. Turn the controller off: within 500 ms the motors stop, the eyes show the tired
+   face and the serial prints `Fail-safe: link lost`.
 
 ## Troubleshooting
 
-### Robot Doesn't Respond to Commands
+### Robot does not respond to commands
 
-- **Check:** ESPNowProtocol is installed correctly
-- **Check:** Node IDs match (robot = 2, controller = 1)
-- **Check:** Both devices have unique but compatible MAC addresses
-- **Check:** Signal strength - move devices closer together
-- **Solution:** Check serial logs for error messages
+- Check the node IDs: robot 2, controller 1.
+- Wait a few seconds after power-up for peer discovery.
+- Check the serial log at 115200 baud.
 
-### OLED Display Not Working
+### OLED display not working
 
-- **Check:** I2C address is 0x3C (verify with I2C scanner)
-- **Check:** SDA/SCL connections on correct pins (22/21)
-- **Check:** Display has proper 3.3V and GND connections
-- **Solution:** Adjust I2C pull-up resistors if needed
+- Check the I2C address (0x3C) with an I2C scanner.
+- Check SDA/SCL on GPIO 22/21 (swapped compared with the ESP32 default).
+- The serial port prints `Falha ao iniciar display SH1106` if the display does not respond.
 
-### Motors Not Moving
+### Motors not moving
 
-- **Check:** Motor driver has correct power supply
-- **Check:** Motor connections to driver outputs
-- **Check:** PWM pins are correctly assigned
-- **Solution:** Test motor driver independently first
-
-## Technical Details
-
-### Memory Usage
-
-- **Flash:** ~45% (program code + assets)
-- **RAM:** ~20% (buffers + variables + FreeRTOS tasks)
-- **PROGMEM:** Eye animation bitmaps stored in flash
-
-### Performance Characteristics
-
-- **Command Processing:** <10ms latency
-- **Face Animation:** 100 FPS (10ms update interval)
-- **Telemetry Rate:** 1 Hz (every 1 second)
-- **Fail-safe Timeout:** 500ms
-- **PWM Frequency:** 1 kHz
-
-### Code Organization
-
-- **Header comments:** Comprehensive documentation
-- **Sections:** Hardware config, protocol, motor control, face animation
-- **FreeRTOS:** Dual-core operation (animation on core 1, main loop on core 0)
-- **Inline comments:** Strategic explanations for complex logic
-
-## Contributing
-
-Contributions are welcome! Please feel free to:
-
-1. Report issues or bugs
-2. Suggest improvements or features
-3. Submit pull requests with enhancements
-4. Improve documentation
+- Check the power bank output and the motor driver power wiring.
+- Check the IN1–IN4 connections against the pinout above.
+- Try a higher speed: small motors may not start at low PWM duty.
 
 ## License
 
-This project is licensed under the **MIT License** - see the [LICENSE](../LICENSE) file for complete terms.
-
-### Summary
-- ✅ **Commercial use:** Permitted
-- ✅ **Modification:** Permitted
-- ✅ **Distribution:** Permitted
-- ✅ **Private use:** Permitted
-- ⚠️ **Liability:** No warranty provided
-- ⚠️ **Attribution:** License and copyright notice must be included
-
-## References
-
-- **ESP32 Documentation:** https://docs.espressif.com/
-- **ESPNowProtocol Library:** https://github.com/FBSeletronica/ESPNowProtocol
-- **Adafruit Libraries:** https://github.com/adafruit
-- **FluxGarage RoboEyes:** https://github.com/FluxGarage/FluxGarage-RoboEyes
-
-## Support
-
-For questions or issues with this project:
-
-1. Check the [Troubleshooting](#troubleshooting) section
-2. Review the inline code comments in [robot_espnow.ino](./robot_espnow.ino)
-3. Consult the ESPNowProtocol library documentation
-4. Open an issue on GitHub
-
----
-
-**Author:** Fabio Souza  
-**Last Updated:** 2026-04-26  
+This project is licensed under the MIT License — see [LICENSE](../LICENSE).

@@ -4,7 +4,7 @@ A wireless robot control system using the ESP-NOW protocol for ESP32-based devic
 This repository includes two firmware projects:
 
 - **control_espnow/**: handheld controller with OLED display and buttons
-- **robot_espnow/**: robot receiver that executes movement commands
+- **robot_espnow/**: robot receiver that drives the motors and shows animated eyes
 
 The system is designed for low-latency communication without relying on a traditional Wi-Fi network.
 
@@ -13,96 +13,114 @@ The system is designed for low-latency communication without relying on a tradit
 ## Key Features
 
 - 6-button interface for direction and speed control
-- Reliable ESP-NOW protocol with automatic peer discovery
-- OLED display showing command, speed, RSSI, and link status
-- Bidirectional communication with telemetry feedback
-- Low-latency command transmission with reliable retransmission
-- Automatic link loss detection and timeout handling
-- Compatible with Franzininho WiFi (ESP32-S2) and other ESP32 boards
+- ESP-NOW communication with automatic peer discovery
+- Commands sent immediately on change and repeated every 100 ms as keep-alive
+- Robot fail-safe: motors stop if no command arrives for 500 ms
+- OLED on the controller showing command, speed, RSSI, and link status
+- Animated robot eyes that react to movement and link loss
+- Telemetry from the robot used to detect link loss on the controller
 
 ## Hardware Requirements
 
 ### Controller
 
 - [Franzininho WiFi LAB01](https://docs.franzininho.com.br/docs/franzininho-wifi-lab01/) (ESP32-S2)
-- SSD1306 OLED display (128x64, I2C)
-- 6x momentary push buttons
+- SSD1306 OLED display (128x64, I2C) — on board on the LAB01
+- 6x momentary push buttons — on board on the LAB01
 
 ### Robot
 
-- ESP32-based board compatible with ESP-NOW
-- Motor drivers and actuators according to your hardware setup
+- Dual-core ESP32 board (e.g. ESP32-WROOM-32 / D1 mini ESP32). Single-core chips
+  such as ESP32-S2 or ESP32-C3 are not supported, because the eye animation runs
+  in a task pinned to core 1.
+- MX1508 dual H-bridge motor driver (or similar with IN1–IN4 inputs)
+- 2x N20 DC gear motors (differential drive)
+- SH1106 OLED display (128x64, I2C)
+- 5 V USB power bank (powers the ESP32 and the motor driver)
 
 ![Robot Schematic](images/schematic.png)
 
 ## Software Dependencies
 
-Install these libraries in the Arduino IDE or via Library Manager:
+- Arduino IDE 2.x (or arduino-cli)
+- **Arduino-ESP32 core 3.x** (`esp32:esp32`). Core 2.x does not work: the code
+  uses `ledcAttach()` and the ESPNowProtocol library uses the 3.x ESP-NOW callback API.
 
-- **ESPNowProtocol**
-- **Adafruit GFX Library**
-- **Adafruit SSD1306**
-- **Adafruit BusIO**
-- **Adafruit SH110X**
-- **FluxGarage RoboEyes**
+Libraries:
 
-Also install ESP32 board support in the Arduino IDE.
+| Library | Used by | Install |
+| --- | --- | --- |
+| [ESPNowProtocol](https://github.com/FBSeletronica/ESPNowProtocol) | both | clone into `~/Arduino/libraries` (see below) |
+| Adafruit GFX Library | both | Library Manager |
+| Adafruit BusIO | both | Library Manager |
+| Adafruit SSD1306 | controller | Library Manager |
+| Adafruit SH110X | robot | Library Manager |
+| FluxGarage RoboEyes | robot | Library Manager |
+
+```bash
+cd ~/Arduino/libraries
+git clone https://github.com/FBSeletronica/ESPNowProtocol.git
+```
 
 ## Repository Structure
 
 ```
-robo_espnow_lib/
+esp32-robot-espnow/
 ├── control_espnow/
 │   ├── control_espnow.ino
 │   └── README.md
 ├── robot_espnow/
 │   ├── robot_espnow.ino
 │   └── README.md
+├── images/
 ├── LICENSE
 └── README.md
 ```
 
 ## Getting Started
 
-1. Open the Arduino IDE or VS Code with the Arduino extension.
-2. Install ESP32 board support.
-3. Install the libraries listed above.
-4. Clone this repository:
+1. Install the ESP32 core 3.x and the libraries listed above.
+2. Clone this repository:
 
 ```bash
-git clone https://github.com/FBSeletronica/esp32_robot_espnow.git
-cd esp32_robot_espnow
-
+git clone https://github.com/FBSeletronica/esp32-robot-espnow.git
+cd esp32-robot-espnow
 ```
-
 
 ## Flash the firmware
 
 ### Controller
 
 1. Open `control_espnow/control_espnow.ino`.
-2. Select board: **Franzininho WiFi (ESP32-S2)**.
-3. Select the correct port.
-4. Upload the sketch.
+2. Select board: **Franzininho WiFi** (`esp32:esp32:franzininho_wifi_esp32s2`).
+3. Select the correct port and upload.
+
+With arduino-cli:
+
+```bash
+arduino-cli compile -u -p /dev/ttyACM0 -b esp32:esp32:franzininho_wifi_esp32s2 control_espnow
+```
 
 ### Robot
 
 1. Open `robot_espnow/robot_espnow.ino`.
-2. Select a compatible ESP32 board.
-3. Upload the sketch.
+2. Select your ESP32 board (e.g. **ESP32 Dev Module**, `esp32:esp32:esp32`).
+3. Select the correct port and upload.
+
+```bash
+arduino-cli compile -u -p /dev/ttyUSB0 -b esp32:esp32:esp32 robot_espnow
+```
 
 ## Testing the system
 
 1. Power on both devices.
-2. The controller should show the startup screen.
-3. The display should show:
-   - mode
-   - current command
-   - speed
-   - RSSI
-   - link status
-4. Press direction buttons and use buttons A/B to change speed.
-5. When the robot responds, the link should change to `OK`.
+2. The controller shows the Franzininho logo, then the status screen
+   (mode, command, speed, RSSI, link).
+3. The robot plays a laugh animation, then shows a tired face until the controller connects.
+4. Once the robot telemetry arrives (up to a few seconds for peer discovery),
+   the controller shows `LINK: OK` and the robot face changes to idle.
+5. Press direction buttons to move and buttons A/B to change speed.
+6. Turn the controller off: the robot stops within 500 ms and shows the tired face.
 
 ## Command quick reference
 
@@ -113,6 +131,8 @@ cd esp32_robot_espnow
 | LEFT   | Left      | 3     |
 | RIGHT  | Right     | 4     |
 | none   | Stop      | 0     |
+| A      | Speed +10 | —     |
+| B      | Speed −10 | —     |
 
 ### Speed control
 
@@ -121,53 +141,55 @@ cd esp32_robot_espnow
 - Step: 10
 - Starting speed: 50
 
-## Development
-
-### Project architecture
-
-The firmware is designed with a modular structure:
-
-- Hardware abstraction: GPIO, I2C, OLED, and buttons
-- Communication layer: ESPNowProtocol and message handling
-- Application logic: command processing and speed control
-- User interface: display rendering and input reading
-
-### Code structure
-
-1. `setup()` initializes the display, buttons, and ESP-NOW.
-2. `loop()` reads buttons, determines the command, sends the message, and updates the state.
-3. `onData()` processes telemetry received from the robot.
-
-### Debugging
-
-- Use `Serial.begin(115200)` and `Serial.println()` for debug output.
-- Display values on the OLED when needed.
-- Check `ESP.getFreeHeap()` for memory usage.
-- Use an I2C scanner if the OLED does not appear.
-
-### Test checklist
-
-- [ ] Compiles without warnings
-- [ ] Uploads successfully
-- [ ] OLED shows the startup and status screens
-- [ ] Buttons respond correctly
-- [ ] Speed adjusts correctly
-- [ ] RSSI updates with telemetry
-- [ ] Link status changes to OK when connected
-- [ ] Link timeout works
-- [ ] No freezes during operation
-
 ## ESP-NOW communication
 
-- Controller: Node ID 1
-- Robot: Node ID 2
-- Control message: `MSG_CONTROL`
-- Telemetry message: `MSG_TELEMETRY`
+| Item | Value |
+| --- | --- |
+| Controller node ID | 1 |
+| Robot node ID | 2 |
+| `MSG_CONTROL` (1) | Controller → robot, `{cmd, speed}`, sent on change and every 100 ms |
+| `MSG_TELEMETRY` (2) | Robot → broadcast, `{status}`, every 1 s |
+| Robot fail-safe | Motors stop after 500 ms without `MSG_CONTROL` |
+| Controller link timeout | `LINK: LOST` after 3 s without `MSG_TELEMETRY` |
+
+Peers find each other through the ESPNowProtocol HELLO/HEARTBEAT broadcasts, so
+no MAC address needs to be configured. Control packets are sent without ACK/retry
+on purpose: the controller already resends its current state every 100 ms, and
+retrying an old packet would only deliver a stale command.
+
+## Code structure
+
+### Controller
+
+1. `setup()` initializes the display, buttons, and ESP-NOW.
+2. `loop()` reads and debounces the buttons, determines the command, sends it,
+   checks the link timeout, and redraws the OLED when a value changed.
+3. `onData()` receives telemetry from the robot and updates RSSI/link status.
+
+### Robot
+
+1. `setup()` initializes PWM, ESP-NOW, and starts the face animation task.
+2. `onData()` (WiFi task) only stores the latest control packet.
+3. `loop()` executes the stored command, runs the fail-safe, and sends telemetry.
+4. `faceAnimationTask()` (core 1) updates the eyes according to the movement state.
+
+## Debugging
+
+- Both sketches print to the serial port at 115200 baud.
+- Use an I2C scanner if the OLED does not appear.
+
+## Gallery
+
+| | | |
+| --- | --- | --- |
+| ![Robot](images/3.jpg) | ![Robot eyes](images/4.jpg) | ![Robot eyes](images/5.jpg) |
+
+![Controller and robot](images/2.jpg)
 
 ## Additional documentation
 
-- `control_espnow/README.md` — controller-specific documentation
-- `robot_espnow/README.md` — robot-specific documentation
+- [control_espnow/README.md](control_espnow/README.md) — controller-specific documentation
+- [robot_espnow/README.md](robot_espnow/README.md) — robot-specific documentation
 
 ## License
 
