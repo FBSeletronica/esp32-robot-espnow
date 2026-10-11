@@ -24,7 +24,7 @@
  * - Telemetry transmission every 1 second
  *
  * Requirements:
- * - Dual-core ESP32 (the face task is pinned to core 1)
+ * - ESP32 with ESP-NOW (dual-core or single-core; see FACE_TASK_CORE)
  * - Arduino-ESP32 core 3.x (ledcAttach API)
  * - Multiple face expressions (idle, forward, backward, left, right, timeout)
  * - Face recovery animation on connection restoration
@@ -38,7 +38,7 @@
 #include <FluxGarage_RoboEyes.h>
 
 // --------------------------------------------------
-// MOTOR PINS - L298N Dual Motor Driver Configuration
+// MOTOR PINS - MX1508 Dual H-Bridge Driver Configuration
 // These pins control two DC motors via PWM signals
 // Motor Left: IN1 (forward), IN2 (backward)
 // Motor Right: IN3 (forward), IN4 (backward)
@@ -136,13 +136,18 @@ RoboEyes<Adafruit_SH1106G> roboEyes(display);
 // FreeRTOS task handle for face animation task
 TaskHandle_t faceAnimationTaskHandle = nullptr;
 
+// Core for the face task: the same core as loop() (ARDUINO_RUNNING_CORE).
+// On a dual-core ESP32 this is core 1, leaving core 0 to WiFi/ESP-NOW;
+// on single-core chips (ESP32-S2, ESP32-C3, ...) it is core 0.
+#define FACE_TASK_CORE ARDUINO_RUNNING_CORE
+
 // --------------------------------------------------
 // STATE MANAGEMENT AND TIMING
 // --------------------------------------------------
 
 // Communication timing
-// lastCommandTime is written by the ESP-NOW callback (WiFi task, core 0)
-// and read by loop() (core 1), so it is only accessed inside commandMux.
+// lastCommandTime is written by the ESP-NOW callback (WiFi task) and read
+// by loop(), possibly on another core, so it is only accessed inside commandMux.
 volatile unsigned long lastCommandTime = 0;  // Timestamp of last received command
 unsigned long lastTelemetry = 0;             // Timestamp of last sent telemetry
 
@@ -393,7 +398,7 @@ void setupFaceDisplay()
 }
 
 /**
- * Face animation task - pinned to core 1 (shared with the Arduino loop task)
+ * Face animation task - pinned to FACE_TASK_CORE (shared with the Arduino loop task)
  * This FreeRTOS task handles all eye animation updates and state transitions
  * 
  * Features:
@@ -468,7 +473,7 @@ void faceAnimationTask(void *parameter)
 
 /**
  * Start the face animation task
- * Creates a FreeRTOS task pinned to core 1 with 4KB stack
+ * Creates a FreeRTOS task pinned to FACE_TASK_CORE with 4KB stack
  * Priority: 1 (medium priority)
  */
 void startFaceAnimationTask()
@@ -480,7 +485,7 @@ void startFaceAnimationTask()
     nullptr,
     1,
     &faceAnimationTaskHandle,
-    1
+    FACE_TASK_CORE
   );
 }
 
@@ -677,7 +682,7 @@ void onData(uint8_t src, uint8_t id, const uint8_t *data, uint8_t len, int8_t rs
  * - Serial communication at 115200 baud
  * - Motor control pins and PWM
  * - ESP-NOW protocol and node ID
- * - Face animation task on core 1
+ * - Face animation task on FACE_TASK_CORE
  */
 void setup()
 {
@@ -705,7 +710,7 @@ void setup()
 
 /**
  * Main event loop
- * Runs in the Arduino loop task (core 1)
+ * Runs in the Arduino loop task (ARDUINO_RUNNING_CORE)
  * 
  * Responsibilities:
  * - Process ESP-NOW protocol events
@@ -767,6 +772,6 @@ void loop()
     lastTelemetry = now;
   }
 
-  // Yield so the face task and the idle task on core 1 get CPU time
+  // Yield so the face task and the idle task on this core get CPU time
   delay(1);
 }

@@ -25,9 +25,9 @@ motors when the link is lost.
 
 ## Hardware Requirements
 
-- **Dual-core ESP32** board (e.g. ESP32-WROOM-32 / D1 mini ESP32).
-  ESP32-S2, ESP32-C3 and other single-core chips are not supported: the eye
-  animation runs in a FreeRTOS task pinned to core 1.
+- **ESP32 board** with ESP-NOW. The prototype uses a dual-core ESP32
+  (D1 mini ESP32 / ESP32-WROOM-32); single-core chips such as ESP32-S2 and
+  ESP32-C3 are also supported (see [Dual-core and single-core](#dual-core-and-single-core)).
 - **MX1508** dual H-bridge motor driver (or similar with IN1–IN4 inputs)
 - **2x N20 DC gear motors** in differential drive
 - **SH1106 OLED** display (128x64, I2C, address 0x3C)
@@ -81,12 +81,31 @@ git clone https://github.com/FBSeletronica/ESPNowProtocol.git
 
 | Context | Runs on | Responsibility |
 | --- | --- | --- |
-| `onData()` | WiFi task, core 0 | Stores the latest control packet and its timestamp (inside a critical section) |
-| `loop()` | Arduino loop task, core 1 | Executes the stored command, runs the fail-safe, sends telemetry |
-| `faceAnimationTask()` | FreeRTOS task, core 1 | Applies the eye expression and calls `roboEyes.update()` every 10 ms |
+| `onData()` | WiFi task (core 0) | Stores the latest control packet and its timestamp (inside a critical section) |
+| `loop()` | Arduino loop task (`ARDUINO_RUNNING_CORE`) | Executes the stored command, runs the fail-safe, sends telemetry |
+| `faceAnimationTask()` | FreeRTOS task (`FACE_TASK_CORE`) | Applies the eye expression and calls `roboEyes.update()` every 10 ms |
 
 Motors are only driven from `loop()`, so the ESP-NOW callback and the fail-safe
 never write the PWM outputs at the same time.
+
+### Dual-core and single-core
+
+The robot in this project uses a dual-core ESP32, so the firmware takes advantage
+of it: WiFi/ESP-NOW runs on core 0, while `loop()` and the eye animation run on
+core 1. Drawing the eyes and sending the frame over I2C never competes with the
+radio for CPU time.
+
+Two cores are not required, though. The face task is pinned to `FACE_TASK_CORE`,
+which defaults to `ARDUINO_RUNNING_CORE` — core 1 on the ESP32 and core 0 on
+single-core chips such as ESP32-S2 and ESP32-C3. On those chips WiFi, `loop()`
+and the animation share the same core and FreeRTOS switches between them; the
+workload is light (one 10 ms animation step and a few packets per second), so no
+code change is needed. The sketch compiles for `esp32`, `esp32s2` and `esp32c3`;
+only the dual-core ESP32 build has been tested on the robot.
+
+When using another chip, adjust the pins: GPIO 27 and 32 do not exist on the
+ESP32-S2, and the ESP32-C3 only has GPIO 0–21. Avoid strapping and USB pins of
+the chosen board.
 
 ## Face Animation
 

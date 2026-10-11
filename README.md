@@ -30,9 +30,9 @@ The system is designed for low-latency communication without relying on a tradit
 
 ### Robot
 
-- Dual-core ESP32 board (e.g. ESP32-WROOM-32 / D1 mini ESP32). Single-core chips
-  such as ESP32-S2 or ESP32-C3 are not supported, because the eye animation runs
-  in a task pinned to core 1.
+- ESP32 board with ESP-NOW. The prototype uses a dual-core ESP32
+  (D1 mini ESP32 / ESP32-WROOM-32), but single-core chips such as ESP32-S2 and
+  ESP32-C3 are also supported — see [Dual-core and single-core](robot_espnow/README.md#dual-core-and-single-core).
 - MX1508 dual H-bridge motor driver (or similar with IN1–IN4 inputs)
 - 2x N20 DC gear motors (differential drive)
 - SH1106 OLED display (128x64, I2C)
@@ -171,7 +171,7 @@ retrying an old packet would only deliver a stale command.
 1. `setup()` initializes PWM, ESP-NOW, and starts the face animation task.
 2. `onData()` (WiFi task) only stores the latest control packet.
 3. `loop()` executes the stored command, runs the fail-safe, and sends telemetry.
-4. `faceAnimationTask()` (core 1) updates the eyes according to the movement state.
+4. `faceAnimationTask()` (same core as `loop()`) updates the eyes according to the movement state.
 
 ## Debugging
 
