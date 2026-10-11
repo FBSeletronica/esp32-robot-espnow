@@ -257,6 +257,7 @@ String getCommandName(uint8_t cmd)
  * 
  * Called continuously from main loop to keep display current.
  */
+void drawDisplay()
 {
   display.clearDisplay();
 
@@ -301,6 +302,7 @@ String getCommandName(uint8_t cmd)
  * @param len       Length of telemetry data
  * @param rssi      Received signal strength indicator (-dBm)
  */
+void onData(uint8_t src, uint8_t id, const uint8_t *data, uint8_t len, int8_t rssi)
 {
   if (id == MSG_TELEMETRY)
   {
@@ -321,6 +323,7 @@ String getCommandName(uint8_t cmd)
  * @param cmd    Movement command (CMD_*)
  * @param speed  Speed level (MIN_SPEED to MAX_SPEED)
  */
+void sendCommand(uint8_t cmd, int speed)
 {
   // Skip repeated transmissions that happen too quickly.
   if (cmd == lastCmdSent &&
@@ -360,6 +363,7 @@ String getCommandName(uint8_t cmd)
  * 
  * Runs once at device startup.
  */
+void setup()
 {
   Serial.begin(115200);
 
@@ -412,11 +416,13 @@ String getCommandName(uint8_t cmd)
  * - Connection timeout: 3000ms (3 seconds)
  * - Display refresh: ~50Hz (20ms loop time)
  */
+void loop()
 {
   protocol.loop();
 
   // Read button inputs (active LOW due to internal pullup)
   // Each button will be LOW when pressed, HIGH when released
+  bool up    = digitalRead(BOTAO_UP) == LOW;
   bool down  = digitalRead(BOTAO_DOWN) == LOW;
   bool left  = digitalRead(BOTAO_LEFT) == LOW;
   bool right = digitalRead(BOTAO_RIGHT) == LOW;
@@ -425,6 +431,7 @@ String getCommandName(uint8_t cmd)
 
   // Speed adjustment: detect rising edge (button press) only
   // Increment speed when Button A is pressed
+  if (buttonA && lastButtonAState == HIGH)
   {
     speed += SPEED_STEP;
     if (speed > MAX_SPEED)
@@ -436,6 +443,7 @@ String getCommandName(uint8_t cmd)
   if (buttonB && lastButtonBState == HIGH)
   {
     // Decrement speed when Button B is pressed
+    speed -= SPEED_STEP;
     if (speed < MIN_SPEED)
     {
       speed = MIN_SPEED;
@@ -448,6 +456,7 @@ String getCommandName(uint8_t cmd)
   // Determine movement command based on directional pad
   // Priority: UP > DOWN > LEFT > RIGHT
   // (only one direction can be active at a time)
+  uint8_t currentCmd = CMD_STOP;
 
   if (up) currentCmd = CMD_FORWARD;
   else if (down) currentCmd = CMD_BACKWARD;
