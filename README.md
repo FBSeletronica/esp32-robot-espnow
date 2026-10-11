@@ -46,20 +46,23 @@ The system is designed for low-latency communication without relying on a tradit
 - **Arduino-ESP32 core 3.x** (`esp32:esp32`). Core 2.x does not work: the code
   uses `ledcAttach()` and the ESPNowProtocol library uses the 3.x ESP-NOW callback API.
 
-Libraries:
+Libraries — install all of them with the Arduino Library Manager
+(**Sketch → Include Library → Manage Libraries…**, search by name):
 
-| Library | Used by | Install |
-| --- | --- | --- |
-| [ESPNowProtocol](https://github.com/FBSeletronica/ESPNowProtocol) | both | clone into `~/Arduino/libraries` (see below) |
-| Adafruit GFX Library | both | Library Manager |
-| Adafruit BusIO | both | Library Manager |
-| Adafruit SSD1306 | controller | Library Manager |
-| Adafruit SH110X | robot | Library Manager |
-| FluxGarage RoboEyes | robot | Library Manager |
+| Library | Used by |
+| --- | --- |
+| [ESPNowProtocol](https://github.com/FBSeletronica/ESPNowProtocol) (1.2.1 or later) | both |
+| Adafruit GFX Library | both |
+| Adafruit BusIO | both |
+| Adafruit SSD1306 | controller |
+| Adafruit SH110X | robot |
+| FluxGarage RoboEyes | robot |
+
+With arduino-cli:
 
 ```bash
-cd ~/Arduino/libraries
-git clone https://github.com/FBSeletronica/ESPNowProtocol.git
+arduino-cli lib install "ESPNowProtocol" "Adafruit GFX Library" "Adafruit BusIO" \
+  "Adafruit SSD1306" "Adafruit SH110X" "FluxGarage RoboEyes"
 ```
 
 ## Repository Structure

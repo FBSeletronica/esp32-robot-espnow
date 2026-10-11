@@ -51,13 +51,12 @@ Note that SDA/SCL are swapped compared with the usual ESP32 default (SDA 21, SCL
 ## Dependencies
 
 - **Arduino-ESP32 core 3.x** (`esp32:esp32`) — required for `ledcAttach()`
-- [ESPNowProtocol](https://github.com/FBSeletronica/ESPNowProtocol) — clone into `~/Arduino/libraries`
-- Adafruit GFX Library, Adafruit BusIO, Adafruit SH110X — Library Manager
-- FluxGarage RoboEyes — Library Manager
+- Libraries, all from the Arduino Library Manager:
+  [ESPNowProtocol](https://github.com/FBSeletronica/ESPNowProtocol) (1.2.1 or later),
+  Adafruit GFX Library, Adafruit BusIO, Adafruit SH110X, FluxGarage RoboEyes
 
 ```bash
-cd ~/Arduino/libraries
-git clone https://github.com/FBSeletronica/ESPNowProtocol.git
+arduino-cli lib install "ESPNowProtocol" "Adafruit GFX Library" "Adafruit BusIO" "Adafruit SH110X" "FluxGarage RoboEyes"
 ```
 
 ## Wireless Protocol

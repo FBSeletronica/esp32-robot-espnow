@@ -46,12 +46,12 @@ and link status on the OLED display.
 ## Dependencies
 
 - **Arduino-ESP32 core 3.x** (`esp32:esp32`)
-- [ESPNowProtocol](https://github.com/FBSeletronica/ESPNowProtocol) — clone into `~/Arduino/libraries`
-- Adafruit GFX Library, Adafruit SSD1306, Adafruit BusIO — Library Manager
+- Libraries, all from the Arduino Library Manager:
+  [ESPNowProtocol](https://github.com/FBSeletronica/ESPNowProtocol) (1.2.1 or later),
+  Adafruit GFX Library, Adafruit SSD1306, Adafruit BusIO
 
 ```bash
-cd ~/Arduino/libraries
-git clone https://github.com/FBSeletronica/ESPNowProtocol.git
+arduino-cli lib install "ESPNowProtocol" "Adafruit GFX Library" "Adafruit SSD1306" "Adafruit BusIO"
 ```
 
 ## Wireless Protocol
